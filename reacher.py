@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import gym
 import math
 import random
@@ -17,7 +19,7 @@ import torchvision.transforms as T
 
 N_ACTION_BINS = 5
 
-env = gym.make("Reacher-v1")  # .unwrapped?
+env = gym.make("Reacher-v1") #.unwrapped
 
 # set up matplotlib
 is_ipython = 'inline' in matplotlib.get_backend()
@@ -63,11 +65,11 @@ class DQN(nn.Module):
         super(DQN, self).__init__()
         self.conv1 = nn.Conv2d(3, 16, kernel_size=5, stride=2)
         self.bn1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=5, stride=2)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=2)
         self.bn2 = nn.BatchNorm2d(32)
-        self.conv3 = nn.Conv2d(32, 32, kernel_size=5, stride=2)
+        self.conv3 = nn.Conv2d(32, 32, kernel_size=3, stride=2)
         self.bn3 = nn.BatchNorm2d(32)
-        self.head = nn.Linear(128, N_ACTION_BINS)
+        self.head = nn.Linear(2048, N_ACTION_BINS**2)
 
     def forward(self, x):
         x = F.relu(self.bn1(self.conv1(x)))
@@ -76,14 +78,16 @@ class DQN(nn.Module):
         return self.head(x.view(x.size(0), -1))
 
 resize = T.Compose([T.ToPILImage(),
-                    T.Scale(40, interpolation=Image.CUBIC),
+                    T.Scale(80, interpolation=Image.CUBIC),
                     T.ToTensor()])
 
 
 def get_screen():
     screen = env.render(mode='rgb_array').transpose(
         (2, 0, 1))  # transpose into torch order (CHW)
-    # TODO Strip off the top and bottom of the screen
+    env.render()
+    # Strip off the top and bottom of the screen
+    screen = screen[:,50:,25:-25]
 
     # Convert to float, rescare, convert to torch tensor
     # (this doesn't require a copy)
@@ -120,7 +124,7 @@ if use_cuda:
     model.cuda()
 
 optimizer = optim.RMSprop(model.parameters())
-memory = ReplayMemory(10000)
+memory = ReplayMemory(50000)
 
 
 steps_done = 0
@@ -136,7 +140,7 @@ def select_action(state):
         return model(
             Variable(state, volatile=True).type(FloatTensor)).data.max(1)[1].view(1, 1)
     else:
-        return Tensor(actions[random.randrange(N_ACTION_BINS)])
+        return LongTensor([[random.randrange(N_ACTION_BINS)]])
 
 
 episode_durations = []
@@ -161,6 +165,26 @@ def plot_durations():
         display.clear_output(wait=True)
         display.display(plt.gcf())
 
+episode_rewards = []
+
+def plot_rewards():
+    plt.figure(2)
+    plt.clf()
+    rewards_t = torch.FloatTensor(episode_rewards)
+    plt.title('Training...')
+    plt.xlabel('Episode')
+    plt.ylabel('Reward')
+    plt.plot(rewards_t.numpy())
+    # Take 100 episode averages and plot them too
+    if len(rewards_t) >= 100:
+        means = rewards_t.unfold(0, 100, 1).mean(1).view(-1)
+        means = torch.cat((torch.zeros(99), means))
+        plt.plot(means.numpy())
+
+    plt.pause(0.001)  # pause a bit so that plots are updated
+    if is_ipython:
+        display.clear_output(wait=True)
+        display.display(plt.gcf())
 
 last_sync = 0
 
@@ -212,7 +236,7 @@ def optimize_model():
         param.grad.data.clamp_(-1, 1)
     optimizer.step()
 
-num_episodes = 10
+num_episodes = 5000
 for i_episode in range(num_episodes):
     # Initialize the environment and state
     env.reset()
@@ -221,8 +245,9 @@ for i_episode in range(num_episodes):
     state = current_screen - last_screen
     for t in count():
         # Select and perform an action
-        action = select_action(state)
-        _, reward, done, _ = env.step(action[0, 0])
+        action_n = select_action(state)
+        _, reward, done, _ = env.step(actions[int(action_n[0,0])])
+        ep_reward = reward
         reward = Tensor([reward])
 
         # Observe new state
@@ -234,7 +259,7 @@ for i_episode in range(num_episodes):
             next_state = None
 
         # Store the transition in memory
-        memory.push(state, action, next_state, reward)
+        memory.push(state, action_n, next_state, reward)
 
         # Move to the next state
         state = next_state
@@ -243,10 +268,12 @@ for i_episode in range(num_episodes):
         optimize_model()
         if done:
             episode_durations.append(t + 1)
-            plot_durations()
+            episode_rewards.append(ep_reward)
+            plot_rewards()
             break
 
 print('Complete')
+torch.save(model.state_dict(), "trained_model.dat")
 env.render(close=True)
 env.close()
 plt.ioff()
