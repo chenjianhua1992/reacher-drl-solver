@@ -63,7 +63,7 @@ class ReplayMemory(object):
 class DQN(nn.Module):
     def __init__(self):
         super(DQN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=5, stride=2)
+        self.conv1 = nn.Conv2d(4, 16, kernel_size=5, stride=2)
         self.bn1 = nn.BatchNorm2d(16)
         self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=2)
         self.bn2 = nn.BatchNorm2d(32)
@@ -77,7 +77,9 @@ class DQN(nn.Module):
         x = F.relu(self.bn3(self.conv3(x)))
         return self.head(x.view(x.size(0), -1))
 
+
 resize = T.Compose([T.ToPILImage(),
+                    T.Lambda(lambda x: x.convert("L")),
                     T.Scale(80, interpolation=Image.CUBIC),
                     T.ToTensor()])
 
@@ -98,15 +100,15 @@ def get_screen():
 
 
 def get_actions_vector(nbins):
-    x = np.linspace(-1, 1, nbins)
-    y = np.linspace(-1, 1, nbins)
+    x = np.linspace(-0.3, 0.3, nbins)
+    y = np.linspace(-0.3, 0.3, nbins)
     xv, yv = np.meshgrid(x, y)
     return np.array([xv.flatten(), yv.flatten()]).transpose()
 
 
 env.reset()
 plt.figure()
-plt.imshow(get_screen().cpu().squeeze(0).permute(1, 2, 0).numpy(),
+plt.imshow(get_screen().cpu().squeeze().numpy(),"gray",
            interpolation='none')
 plt.title('Example extracted screen')
 plt.show()
@@ -236,13 +238,13 @@ def optimize_model():
         param.grad.data.clamp_(-1, 1)
     optimizer.step()
 
-num_episodes = 5000
+num_episodes = 100000
 for i_episode in range(num_episodes):
     # Initialize the environment and state
     env.reset()
-    last_screen = get_screen()
-    current_screen = get_screen()
-    state = current_screen - last_screen
+    state = get_screen()
+    while state.size(1) < 4:
+        state = torch.cat([state, get_screen()],dim=1)
     for t in count():
         # Select and perform an action
         action_n = select_action(state)
@@ -251,11 +253,9 @@ for i_episode in range(num_episodes):
         reward = Tensor([reward])
 
         # Observe new state
-        last_screen = current_screen
-        current_screen = get_screen()
-        if not done:
-            next_state = current_screen - last_screen
-        else:
+        next_state = state[:,1:,:,:]
+        next_state = torch.cat([next_state, get_screen()],dim=1)
+        if done:
             next_state = None
 
         # Store the transition in memory
